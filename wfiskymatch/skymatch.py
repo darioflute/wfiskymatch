@@ -271,13 +271,33 @@ def computeOffsets(files, outfile="offsets"):
     from scipy.sparse.linalg import spsolve
     import h5py
     import numpy as np
+    import os
     
     row = []
     col = []
     data = []
+    nfiles = len(files)
     B = np.zeros(nfiles)
     D = np.zeros(nfiles)
 
+    # Rough overlap using the coverage extension
+    coverage = []
+    for file in files:
+        with h5py.File(file, 'r') as hdf5_file:
+            cov = hdf5_file['hpcoverage'][:]
+            coverage.append(cov)
+    xcorr = np.zeros((nfiles,nfiles))
+    for i in range(nfiles-1):
+        a = coverage[i]
+        for j in range(i+1, nfiles):
+            b = coverage[j]
+            common, aidx, bidx = np.intersect1d(a, b, return_indices=True)
+            if len(common) > 0:
+                xcorr[i,j] = 1
+                xcorr[j,i] = 1
+    print('There is a total of {0:n} overlaps'.format(int(np.sum(xcorr))))
+    
+    # Detailed computation for xcorr==1 only
     for i in range(nfiles-1):
         print('.', end='')
         with h5py.File(files[i], 'r') as hdf5_file:
@@ -311,15 +331,28 @@ def computeOffsets(files, outfile="offsets"):
     A = csc_array((data, (row, col)), shape=(nfiles,nfiles))
 
     epsilon = spsolve(A, B)
-    delta = - np.nanmedian(epsilon2)
+    delta = - np.nanmedian(epsilon)
     epsilon += delta
 
-    # Save pixels with finite values
+    # Save offsets with file names
     import h5py
-    with h5py.File(os.path.join(outdir,outfile+'.h5'), 'w') as hdf5_file:
+    if outfile.endswith('.h5'):
+        pass
+    else:
+        outfile += '.h5'
+
+    filenames = []
+    for file in files:
+        filepath, filebase = os.path.split(file)
+        filename = filebase.split('.')[0]
+        filenames.append(filename)
+        
+    with h5py.File(outfile, 'w') as hdf5_file:
         d = hdf5_file.create_dataset('offsets', (len(epsilon),), dtype='float32') 
         d[:] = epsilon
-
+        ds = hdf5_file.create_dataset('files', shape=len(files), dtype=h5py.string_dtype(), compression="gzip")
+        ds[:] = filenames
+        
     return epsilon
     
 
@@ -381,6 +414,10 @@ def fits2healpix(infile, outdir):
     """
     import os
     import numpy as np
+
+    # Check if output directory exists, otherwise create it
+    os.makedirs(outdir, exist_ok=True) 
+    
     # 0. Extract filename [assumed to be the part before the first dot from the left]
     filepath, filebase = os.path.split(infile)
     filename = filebase.split('.')[0]
@@ -510,11 +547,13 @@ def asdf2healpix(infile, outdir):
         d = hdf5_file.create_dataset('hpcoverage', (len(idcoverage),), dtype='int64') 
         d[:] = idcoverage
 
+ 
 def plotcoverage(files):
     """
     Given a list of hdf5 files plots the coverage over the sky in Mollweide projection
     """
     import numpy as np
+    import h5py
     from healpy.newvisufunc import projview, newprojplot
     NPIX = 12*(2**10)**2
     coverage = np.arange(NPIX) * 0
