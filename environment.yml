@@ -1,0 +1,20 @@
+name: wfiskymatch
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - astropy>=5.3.4
+  - matplotlib>=3.10
+  - numpy>=1.26.0
+  - pip>=23.3
+  - python>=3.12
+  - scipy>=1.11.4
+  - healpy>=1.18.0
+  - jupyterlab>=4.0.11
+  - pandas>=2.1.4
+  - asdf>=4.1.0
+  - fitsio>=1.25
+  - hpgeom>=1.4.0
+  - healsparse>=1.11.1
+  - skyproj>=2.0.0
+  - h5py>=3.12.1
