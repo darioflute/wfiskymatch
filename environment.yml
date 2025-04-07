@@ -16,3 +16,4 @@ dependencies:
   - healsparse>=1.11.1
   - skyproj>=2.0.0
   - h5py>=3.12.1
+  - reproject>=0.14.1
