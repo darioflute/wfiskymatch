@@ -1,0 +1,8 @@
+
+Copyright 2025 -  Dario Fadda.
+
+wfiskymatch
+
+This package allows one to equalize the sky backround of different overlapping images obtained with WFI onboard the Nancy Grace Roman space telescope.
+
+The software has been developed by Dario Fadda (Space Telescope Institute) and it is publicly avaible under the GNU General Public License v3.0.
