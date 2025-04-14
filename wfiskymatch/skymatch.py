@@ -1,5 +1,3 @@
-# Routine for computing cubes of interpolated images
-
 def reprojectAll(
     input_data,
     output_projection,
@@ -10,6 +8,8 @@ def reprojectAll(
     **kwargs,
 ):
     """
+    Routine for computing cubes of interpolated images
+
     Given a set of input images, reproject these to a single cube.
 
     This currently only works with 2-d images with celestial WCS.
@@ -187,7 +187,7 @@ def reprojectAll(
      
     
 
-def computeOffsetsold(images, footprints, sigmas):
+def computeOffsets(images, footprints, sigmas):
     """
     Input:
 
@@ -256,7 +256,7 @@ def computeOffsetsold(images, footprints, sigmas):
     return epsilon
 
 
-def computeOffsets(files, outfile="offsets"):
+def pixmatch(files, outfile="offsets", verbose=False):
     """
     Input:
 
@@ -299,7 +299,8 @@ def computeOffsets(files, outfile="offsets"):
     
     # Detailed computation for xcorr==1 only
     for i in range(nfiles-1):
-        print('.', end='')
+        if verbose:
+            print('.', end='')
         with h5py.File(files[i], 'r') as hdf5_file:
             hpimage = hdf5_file['hpimage'][:]
             apix = hpimage['pixel']
@@ -548,7 +549,7 @@ def asdf2healpix(infile, outdir):
         d[:] = idcoverage
 
  
-def plotcoverage(files):
+def plotcoverage(files, labels=None):
     """
     Given a list of hdf5 files plots the coverage over the sky in Mollweide projection
     """
@@ -558,11 +559,21 @@ def plotcoverage(files):
     NPIX = 12*(2**10)**2
     coverage = np.arange(NPIX) * 0
 
-    for file in files:
-        with h5py.File(file, 'r') as hdf5_file:
-            cov = hdf5_file['hpcoverage'][:]
-            coverage[cov] = 1
-        
+    
+    if labels is None:
+        for file in files:
+            with h5py.File(file, 'r') as hdf5_file:
+                cov = hdf5_file['hpcoverage'][:]
+                coverage[cov] = 1
+    else:
+        if len(files) == len(labels):
+            for file,label in zip(files, labels):
+                with h5py.File(file, 'r') as hdf5_file:
+                    cov = hdf5_file['hpcoverage'][:]
+                    coverage[cov] = label+1
+        else:
+            print('Labels do not correspond to files')
+            
     projview(
         coverage, coord=["C"], graticule=True, graticule_labels=True, projection_type="mollweide", nest=True,cmap='gray_r'
     )
