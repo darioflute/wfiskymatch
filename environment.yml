@@ -2,6 +2,7 @@ name: wfiskymatch
 channels:
   - conda-forge
   - defaults
+  - astropy
 dependencies:
   - astropy>=5.3.4
   - matplotlib>=3.10
@@ -17,3 +18,6 @@ dependencies:
   - skyproj>=2.0.0
   - h5py>=3.12.1
   - reproject>=0.14.1
+  - pyvo>=1.5.2
+  - pip:
+      - stsci.skypac==1.0.10
