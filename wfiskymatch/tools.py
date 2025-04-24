@@ -549,33 +549,35 @@ def asdf2healpix(infile, outdir):
         d[:] = idcoverage
 
  
-def plotcoverage(files, labels=None):
+
+def computeOverlaps(files):
     """
-    Given a list of hdf5 files plots the coverage over the sky in Mollweide projection
-    """
-    import numpy as np
+    Given a list of h5 files computes the overlaps between files and save them in a sparse array matrix (CSC)
+    """    
     import h5py
-    from healpy.newvisufunc import projview, newprojplot
-    NPIX = 12*(2**10)**2
-    coverage = np.arange(NPIX) * 0
+    import numpy as np
+    from scipy.sparse import csc_array
 
-    
-    if labels is None:
-        for file in files:
-            with h5py.File(file, 'r') as hdf5_file:
-                cov = hdf5_file['hpcoverage'][:]
-                coverage[cov] = 1
-    else:
-        if len(files) == len(labels):
-            for file,label in zip(files, labels):
-                with h5py.File(file, 'r') as hdf5_file:
-                    cov = hdf5_file['hpcoverage'][:]
-                    coverage[cov] = label+1
-        else:
-            print('Labels do not correspond to files')
-            
-    projview(
-        coverage, coord=["C"], graticule=True, graticule_labels=True, projection_type="mollweide", nest=True,cmap='gray_r'
-    )
+    nfiles = len(files)
+    coverage = []
+    for file in files:
+        with h5py.File(file, 'r') as hdf5_file:
+            cov = hdf5_file['hpcoverage'][:]
+            coverage.append(cov)
 
-    
+
+    row = []
+    col = []
+    data = []
+    for i in range(nfiles-1):
+        a = coverage[i]
+        for j in range(i+1, nfiles):
+            b = coverage[j]
+            common, aidx, bidx = np.intersect1d(a, b, return_indices=True)
+            if len(common) > 0:
+                col.extend([i,j])
+                row.extend([j,i])
+                data.extend([1,1])
+
+    overlap = csc_array((data, (row, col)), shape=(nfiles,nfiles))
+    return overlap
