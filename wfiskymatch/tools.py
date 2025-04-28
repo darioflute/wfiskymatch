@@ -565,7 +565,6 @@ def computeOverlaps(files):
             cov = hdf5_file['hpcoverage'][:]
             coverage.append(cov)
 
-
     row = []
     col = []
     data = []
