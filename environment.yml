@@ -21,3 +21,4 @@ dependencies:
   - pyvo>=1.5.2
   - pip:
       - stsci.skypac==1.0.10
+      - roman-datamodels>=0.23.1
