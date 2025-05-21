@@ -256,7 +256,7 @@ def computeOffsets(images, footprints, sigmas):
     return epsilon
 
 
-def pixmatch(files, outfile="offsets", verbose=False):
+def pixmatch(files, outfile="offsets", verbose=False, offsets=None):
     """
     Input:
 
@@ -295,7 +295,8 @@ def pixmatch(files, outfile="offsets", verbose=False):
             if len(common) > 0:
                 xcorr[i,j] = 1
                 xcorr[j,i] = 1
-    print('There is a total of {0:n} overlaps'.format(int(np.sum(xcorr))))
+    if verbose:
+        print('There is a total of {0:n} overlaps'.format(int(np.sum(xcorr))))
     
     # Detailed computation for xcorr==1 only
     for i in range(nfiles-1):
@@ -306,6 +307,8 @@ def pixmatch(files, outfile="offsets", verbose=False):
             apix = hpimage['pixel']
             aval = hpimage['value']
             aunc2 = hpimage['unc']**2
+        if offsets is not None:
+            aval += offsets[i]
         for j in range(i+1, nfiles):
             if xcorr[i,j] == 1:
                 with h5py.File(files[j], 'r') as hdf5_file:
@@ -314,6 +317,8 @@ def pixmatch(files, outfile="offsets", verbose=False):
                     bval = hpimage['value']
                     bunc2 = hpimage['unc']**2
                     common_elements, aidx, bidx = np.intersect1d(apix, bpix, return_indices=True)
+                if offsets is not None:
+                    bval += offsets[j]
                 if len(common_elements) > 0:
                     a_ij = - np.sum(1/(aunc2[aidx] + bunc2[bidx]))
                     I_ij = - np.sum((aval[aidx]-bval[bidx])/(aunc2[aidx] + bunc2[bidx]))
@@ -434,6 +439,14 @@ def fits2healpix(infile, outdir):
     x, y = np.arange(nx), np.arange(ny)
     xx, yy = np.meshgrid(x, y)
     ra, dec = wcs.all_pix2world(xx, yy, 0)
+    # Compute sigma
+    idfinite = np.isfinite(data)
+    mad = computeSigma(data[idfinite]) * 1.4826 # MAD to sigma for Normal distribution
+    # Substitute pointed data beyond 10 sigma with median filtered image
+    from scipy.ndimage.filters import median_filter
+    meddata = median_filter(data, size=10)  # a 10 pixels boxcar median
+    idx = np.abs(data - meddata) > 10 * mad
+    data[idx] = meddata[idx]
     # 2. Healsparse map
     from healsparse import healSparseMap as hspm
     import healpy as hp
@@ -465,7 +478,6 @@ def fits2healpix(infile, outdir):
     upx = upx[idx]
     values = values[idx]
     # Compute sigma
-    mad = computeSigma(values)
     sigmas = np.full(len(values), mad)
     hpimage = np.rec.array([upx,values,sigmas],
                       formats='int64,float32,float32',
@@ -477,9 +489,9 @@ def fits2healpix(infile, outdir):
         d[:] = idcoverage
 
 
-def asdf2healpix(infile, outdir):
+def asdf2healpix(infile, outdir,nsparse=16,convolve=False):
     """
-    Reproject an ASDF image to a Healpix tessellation with 3" pixels
+    Reproject an ASDF WFI image to a Healpix tessellation with 3" pixels
 
     input:
        infile, 'name of asdf file'
@@ -489,27 +501,53 @@ def asdf2healpix(infile, outdir):
     """
     import os
     import numpy as np
+    import time
     # 0. Extract filename [assumed to be the part before the first dot from the left]
     filepath, filebase = os.path.split(infile)
     filename = filebase.split('.')[0]
     # 1. Read the ASDF file
     import roman_datamodels as rd
-    from astropy.wcs import WCS
+    from roman_datamodels.dqflags import pixel
+
+    start_time = time.time()
     with rd.open(infile) as dm:
         data = dm.data.copy()
         err = dm.err.copy()
-        header = dm.meta.wcs.to_fits()[0]
-    wcs = WCS(header)
-    # grid of ra-dec 
+        wcs = dm.meta.wcs
+        dq = dm.dq.copy()
+    print('file ', filename,' read in ', time.time() - start_time)
+        
+    start_time = time.time()
+    # Boxcar median filtered image
+    from scipy.ndimage.filters import median_filter
+    meddata = median_filter(data, size=10)  # a 10 pixels boxcar median
+    idx = np.abs(data - meddata) > 10 * err
+    data[idx] = meddata[idx]   
+    # mask bad pixels (substitute with median filtered image)
+    mask = (dq & pixel.DO_NOT_USE.value) | (dq & pixel.DEAD) | (dq & pixel.SATURATED)| (dq & pixel.JUMP_DET) 
+    data[mask == 1] = meddata[mask == 1]
+    # mask strong sources [experimental]
+    idx = np.abs(data - np.nanmedian(data)) > 10*err
+    data[idx] = np.nanmedian(data)
+
+    if convolve:
+        from astropy.convolution import convolve_fft
+        from astropy.convolution import Gaussian2DKernel
+        pix = np.sqrt(4*np.pi/(12 *  (2**nsparse)**2))*3600 # pixel in arcsec
+        psf = Gaussian2DKernel(pix/(0.11*2)) # sigma is the new pixel in terms of resolution
+        data = convolve_fft(data, psf, boundary='wrap')
+    #wcs = WCS(header)
+    # grid of ra-dec
     ny, nx = np.shape(data)
     x, y = np.arange(nx), np.arange(ny)
     xx, yy = np.meshgrid(x, y)
-    ra, dec = wcs.all_pix2world(xx, yy, 0)
+    #ra, dec = wcs.all_pix2world(xx, yy, 0)
+    ra, dec = wcs(xx, yy)
     # 2. Healsparse map
     from healsparse import healSparseMap as hspm
     import healpy as hp
     nside_coverage = 2**10  # 3.4' x 3.4' tiles
-    nside_sparse = 2**16    # 3.2" x 3.2" pixels
+    nside_sparse = 2**nsparse    # 3.2" x 3.2" pixels
     hsp_map = hspm.HealSparseMap.make_empty(nside_coverage, nside_sparse, dtype=np.float64)
     # list of Healpix pixels 
     px_num = hp.ang2pix(hsp_map._nside_sparse, ra, dec, nest=True, lonlat=True)
@@ -526,7 +564,7 @@ def asdf2healpix(infile, outdir):
     # Look up pixels in input WCS
     xinds, yinds = wcs.world_to_pixel(world_out)
     coords = np.array([yinds, xinds])
-    ## order of the spline interpolation: 1 is bilinear (does not create too much border effects)
+    ## order of the spline interpolation: 1 is bilinear (does not create noticeable border effects)
     values = map_coordinates(data, coords, output=None, order = 1, cval=np.nan)
     errvalues = map_coordinates(err, coords, output=None, order = 1, cval=np.nan)
     # Update only possible with float64 !
@@ -541,8 +579,7 @@ def asdf2healpix(infile, outdir):
                       formats='int64,float32,float32',
                       names='pixel, value, unc')
     idcoverage = np.where(hsp_map.coverage_map>0)[0]  # Select covered tiles
-    print('filename is ', filename)
-    print('saving in '+os.path.join(outdir,filename+'.h5'))
+    print('saving in '+os.path.join(outdir,filename+'.h5')+' time: ', time.time() - start_time)
     with h5py.File(os.path.join(outdir,filename+'.h5'), 'w') as hdf5_file:
         hdf5_file.create_dataset('hpimage', data=hpimage, compression="gzip")
         d = hdf5_file.create_dataset('hpcoverage', (len(idcoverage),), dtype='int64') 

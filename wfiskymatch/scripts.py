@@ -290,7 +290,7 @@ def plotcoverage(files, labels=None, cmap=None):
     import h5py
     from healpy.newvisufunc import projview, newprojplot
     NPIX = 12*(2**10)**2
-    coverage = np.arange(NPIX) * 0
+    coverage = np.zeros(NPIX)
 
 
 
