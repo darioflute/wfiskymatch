@@ -272,6 +272,7 @@ def pixmatch(files, outfile="offsets", verbose=False, offsets=None):
     import h5py
     import numpy as np
     import os
+    from astropy.stats import biweight_location
     
     row = []
     col = []
@@ -337,7 +338,8 @@ def pixmatch(files, outfile="offsets", verbose=False, offsets=None):
     A = csc_array((data, (row, col)), shape=(nfiles,nfiles))
 
     epsilon = spsolve(A, B)
-    delta = - np.nanmedian(epsilon)
+    #delta = - np.nanmedian(epsilon)
+    delta = - biweight_location(epsilon)
     epsilon += delta
 
     # Save offsets with file names
@@ -489,13 +491,15 @@ def fits2healpix(infile, outdir):
         d[:] = idcoverage
 
 
-def asdf2healpix(infile, outdir,nsparse=16,convolve=False):
+def asdf2healpix(infile, outdir,nsparse=16):
     """
     Reproject an ASDF WFI image to a Healpix tessellation with 3" pixels
 
     input:
        infile, 'name of asdf file'
        outdir, 'name of output directory'
+       nsparse, 2**nsparse gives the resolution of the Healpix grid
+       nsigma,  number of sigma to mask bright point sources
 
     The code creates files with list of pixels, values, and uncertainty in hdf5 format
     """
@@ -519,29 +523,37 @@ def asdf2healpix(infile, outdir,nsparse=16,convolve=False):
         
     start_time = time.time()
     # Boxcar median filtered image
-    from scipy.ndimage.filters import median_filter
-    meddata = median_filter(data, size=10)  # a 10 pixels boxcar median
-    idx = np.abs(data - meddata) > 10 * err
-    data[idx] = meddata[idx]   
+    #from scipy.ndimage.filters import median_filter
+    #from scipy.signal import medfilt2d
+    #meddata = medfilt2d(data,kernel_size=9)  # a 10 pixels boxcar median
+    # Image and errors are block reduced by a factor 14 (4088 = 14 * 292
+    # Then, the center of the new pixels is computed as x=np.arange(292)*14+6.5
+    from astropy.nddata import block_reduce
     # mask bad pixels (substitute with median filtered image)
     mask = (dq & pixel.DO_NOT_USE.value) | (dq & pixel.DEAD) | (dq & pixel.SATURATED)| (dq & pixel.JUMP_DET) 
-    data[mask == 1] = meddata[mask == 1]
-    # mask strong sources [experimental]
-    idx = np.abs(data - np.nanmedian(data)) > 10*err
-    data[idx] = np.nanmedian(data)
+    data[mask == 1] = np.nan
+    nblock = 14
+    data = block_reduce(data, nblock, func=np.nanmedian)
+    #meddata = np.kron(rdata, np.ones((14,14)))
+    err = block_reduce(err, nblock, func=np.nanmedian)
+    #mederr = np.kron(rdata, np.ones((14,14)))
+    # mask strong sources
+    #idx = np.abs(data - meddata) > nsigma * err
+    #data[idx] = meddata[idx]   
+    #data = meddata
+    #err = mederr
 
-    if convolve:
-        from astropy.convolution import convolve_fft
-        from astropy.convolution import Gaussian2DKernel
-        pix = np.sqrt(4*np.pi/(12 *  (2**nsparse)**2))*3600 # pixel in arcsec
-        psf = Gaussian2DKernel(pix/(0.11*2)) # sigma is the new pixel in terms of resolution
-        data = convolve_fft(data, psf, boundary='wrap')
+    #if convolve:
+    #    from astropy.convolution import convolve_fft
+    #    from astropy.convolution import Gaussian2DKernel
+    #    pix = np.sqrt(4*np.pi/(12 *  (2**nsparse)**2))*3600 # pixel in arcsec
+    #    psf = Gaussian2DKernel(pix/(0.11*2)) # sigma is the new pixel in terms of resolution
+    #    data = convolve_fft(data, psf, boundary='wrap')
     #wcs = WCS(header)
     # grid of ra-dec
     ny, nx = np.shape(data)
-    x, y = np.arange(nx), np.arange(ny)
+    x, y = np.arange(nx)*nblock+(nblock-1)*0.5, np.arange(ny)*nblock+(nblock-1)*0.5
     xx, yy = np.meshgrid(x, y)
-    #ra, dec = wcs.all_pix2world(xx, yy, 0)
     ra, dec = wcs(xx, yy)
     # 2. Healsparse map
     from healsparse import healSparseMap as hspm
@@ -563,6 +575,8 @@ def asdf2healpix(infile, outdir,nsparse=16,convolve=False):
     world_out = SkyCoord(lon_out*u.degree, lat_out*u.degree, frame=coord_system_out)
     # Look up pixels in input WCS
     xinds, yinds = wcs.world_to_pixel(world_out)
+    xinds = xinds/nblock - (nblock-1) * 0.5
+    yinds = yinds/nblock - (nblock-1) * 0.5
     coords = np.array([yinds, xinds])
     ## order of the spline interpolation: 1 is bilinear (does not create noticeable border effects)
     values = map_coordinates(data, coords, output=None, order = 1, cval=np.nan)
