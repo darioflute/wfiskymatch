@@ -408,7 +408,46 @@ def computeSigma(values):
         idr = np.where(np.abs(residuals) < 3 * mad)
         med = np.median(values[idr])
         mad = np.median(np.abs(values[idr]-med))
-    return mad    
+    return mad
+
+
+def maskSources(data, dq=None, fwhm=1.0, areathreshold=1000, eccthreshold=0.8):
+
+    import numpy as np
+
+    # Define background
+    from photutils.background import Background2D, MedianBackground
+    data0 = data.copy()
+    bkg_estimator = MedianBackground()
+    bkg = Background2D(data0, (50, 50), filter_size=(3, 3), bkg_estimator=bkg_estimator)
+    data0 -= bkg.background
+
+    # Convolve with Gaussian kernel
+    from astropy.convolution import convolve
+    from photutils.segmentation import make_2dgaussian_kernel
+    kernel = make_2dgaussian_kernel(fwhm, size=5)
+    convolved_data = convolve(data0, kernel)
+
+    # Detect sources and create segmentation map
+    from photutils.segmentation import detect_sources, SourceCatalog
+    threshold = 0.7 * bkg.background_rms
+    segment_map = detect_sources(convolved_data, threshold, npixels=10)
+    cat = SourceCatalog(data0, segment_map, convolved_data=convolved_data)
+
+    # Select sources to be masked
+    ecc = (cat.eccentricity.value < eccthreshold) | (cat.area.value < areathreshold)
+    roundsources = cat.label[ecc]
+    mask = np.isin(segment_map.data, roundsources)
+
+    # Mask bad pixels if dq is available
+    if dq is not None:
+        from roman_datamodels.dqflags import pixel
+        idx = dq == pixel.GOOD.value
+        mask[~idx] = True
+
+    # Return mask
+    return mask
+
 
 def fits2healpix(infile, outdir):
     """
@@ -491,7 +530,7 @@ def fits2healpix(infile, outdir):
         d[:] = idcoverage
 
 
-def asdf2healpix(infile, outdir,nsparse=16):
+def asdf2healpix(infile, outdir,nsparse=17,ncoverage=11):
     """
     Reproject an ASDF WFI image to a Healpix tessellation with 3" pixels
 
@@ -522,49 +561,35 @@ def asdf2healpix(infile, outdir,nsparse=16):
     print('file ', filename,' read in ', time.time() - start_time)
         
     start_time = time.time()
-    # Boxcar median filtered image
-    #from scipy.ndimage.filters import median_filter
-    #from scipy.signal import medfilt2d
-    #meddata = medfilt2d(data,kernel_size=9)  # a 10 pixels boxcar median
-    # Image and errors are block reduced by a factor 14 (4088 = 14 * 292
-    # Then, the center of the new pixels is computed as x=np.arange(292)*14+6.5
+    # 2. Mask point sources and bad pixels
+    mask = maskSources(data, dq=dq, fwhm=1, areathreshold=1000)    
+    # 3. Image and errors are block reduced by a factor nblock
     from astropy.nddata import block_reduce
-    # mask bad pixels (substitute with median filtered image)
-    mask = (dq & pixel.DO_NOT_USE.value) | (dq & pixel.DEAD) | (dq & pixel.SATURATED)| (dq & pixel.JUMP_DET) 
-    data[mask == 1] = np.nan
-    nblock = 14
-    data = block_reduce(data, nblock, func=np.nanmedian)
-    #meddata = np.kron(rdata, np.ones((14,14)))
-    err = block_reduce(err, nblock, func=np.nanmedian)
-    #mederr = np.kron(rdata, np.ones((14,14)))
-    # mask strong sources
-    #idx = np.abs(data - meddata) > nsigma * err
-    #data[idx] = meddata[idx]   
-    #data = meddata
-    #err = mederr
-
-    #if convolve:
-    #    from astropy.convolution import convolve_fft
-    #    from astropy.convolution import Gaussian2DKernel
-    #    pix = np.sqrt(4*np.pi/(12 *  (2**nsparse)**2))*3600 # pixel in arcsec
-    #    psf = Gaussian2DKernel(pix/(0.11*2)) # sigma is the new pixel in terms of resolution
-    #    data = convolve_fft(data, psf, boundary='wrap')
-    #wcs = WCS(header)
-    # grid of ra-dec
+    data[mask] = np.nan
+    nblock = 7*2
+    data = block_reduce(data, nblock, func=np.nanmean)
+    err = block_reduce(err, nblock, func=np.nanmean)
+    # Impainting
+    from maskfill import maskfill
+    idx = ~np.isfinite(data)
+    if np.sum(idx) > 0:
+        mask1 = np.zeros(np.shape(data))
+        mask1[idx] = 1
+        data,_ = maskfill(data, mask1, operator='median' )
+    # 4. Healsparse map
+    from healsparse import healSparseMap as hspm
+    import healpy as hp
+    nside_coverage = 2**ncoverage  # 1.7' x 1.7' tiles
+    nside_sparse = 2**nsparse    # 1.6" x 1.6" pixels
+    hsp_map = hspm.HealSparseMap.make_empty(nside_coverage, nside_sparse, dtype=np.float64)
+    # List of Healpix pixels 
     ny, nx = np.shape(data)
     x, y = np.arange(nx)*nblock+(nblock-1)*0.5, np.arange(ny)*nblock+(nblock-1)*0.5
     xx, yy = np.meshgrid(x, y)
     ra, dec = wcs(xx, yy)
-    # 2. Healsparse map
-    from healsparse import healSparseMap as hspm
-    import healpy as hp
-    nside_coverage = 2**10  # 3.4' x 3.4' tiles
-    nside_sparse = 2**nsparse    # 3.2" x 3.2" pixels
-    hsp_map = hspm.HealSparseMap.make_empty(nside_coverage, nside_sparse, dtype=np.float64)
-    # list of Healpix pixels 
     px_num = hp.ang2pix(hsp_map._nside_sparse, ra, dec, nest=True, lonlat=True)
     upx = np.unique(px_num)
-    # 3. Interpolation and update
+    # 5. Interpolation and update
     from scipy.ndimage import map_coordinates
     from astropy.coordinates import SkyCoord
     from astropy import units as u
@@ -583,7 +608,7 @@ def asdf2healpix(infile, outdir,nsparse=16):
     errvalues = map_coordinates(err, coords, output=None, order = 1, cval=np.nan)
     # Update only possible with float64 !
     hsp_map.update_values_pix(upx, values.astype(np.float64))
-    # Save pixels with finite values
+    # 6. Save pixels with finite values
     import h5py
     idx = np.isfinite(values)
     upx = upx[idx]
