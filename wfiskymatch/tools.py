@@ -411,7 +411,7 @@ def computeSigma(values):
     return mad
 
 
-def maskSources(data, dq=None, fwhm=1.0, areathreshold=1000, eccthreshold=0.8):
+def maskSources(data, dq=None, fwhm=1.0, areathreshold=1000, eccthreshold=0.8, nsigma=0.7):
 
     import numpy as np
 
@@ -430,7 +430,7 @@ def maskSources(data, dq=None, fwhm=1.0, areathreshold=1000, eccthreshold=0.8):
 
     # Detect sources and create segmentation map
     from photutils.segmentation import detect_sources, SourceCatalog
-    threshold = 0.7 * bkg.background_rms
+    threshold = nsigma * bkg.background_rms
     segment_map = detect_sources(convolved_data, threshold, npixels=10)
     cat = SourceCatalog(data0, segment_map, convolved_data=convolved_data)
 

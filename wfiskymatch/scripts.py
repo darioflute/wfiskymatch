@@ -151,7 +151,7 @@ def makeMosaic(object, outdir, offsetfile=False, verbose=False, savefootprint=Fa
         fits.writeto(outfile, footprint, wcs_out.to_header(), overwrite=True)
 
 
-def runMontage(object, outdir):
+def runMontage(object, outdir, clean=True):
     """
     Script to run the montage code
     """
@@ -206,17 +206,19 @@ def runMontage(object, outdir):
         shfile.write('mAdd -p corrdir/ images.tbl Ktemplate.hdr '+object+'_montage.fits\n') 
         shfile.write('mv '+object+'_montage.fits ..\n')
         shfile.write('cd ..\n')
-        shfile.write('\\rm -fr '+montagedir+'\n')
+        if clean:
+            shfile.write('\\rm -fr '+montagedir+'\n')
 
     bashCommand = "source "+os.path.join(montagedir,"commands.sh")
     os.system(bashCommand)
 
-def runSkymatch(object, outdir):
+def runSkymatch(object, outdir, outfile = 'skymatch_offsets', clean=True):
 
     import numpy as np
     import tarfile
     import os
     from astropy.io import fits
+    import h5py
     
     skymatchdir = os.path.join(outdir,object+'_skymatch')
     os.makedirs(skymatchdir, exist_ok=True)
@@ -278,9 +280,35 @@ def runSkymatch(object, outdir):
     earray[idx] = np.nan
     fits.writeto(os.path.join(outdir,object+'_skymatch.fits'), earray, wcs_out.to_header(), overwrite=True)
 
-    # Remove temporary skymatch directory
-    bashCommand = "\\rm -fr "+skymatchdir
-    os.system(bashCommand)
+    # Save the offsets
+    offsets = []
+    for f in files:
+        with fits.open(f) as hdu:
+            offsets.append(hdu[0].header['SKYUSER'])    
+
+    filenames = []
+    for file in files:
+        filepath, filebase = os.path.split(file)
+        filename = filebase.split('.')[0]
+        filenames.append(filename)
+
+    # Save offsets with file names
+    import h5py
+    if outfile.endswith('.h5'):
+        pass
+    else:
+        outfile += '.h5'
+
+    with h5py.File(outfile, 'w') as hdf5_file:
+        d = hdf5_file.create_dataset('offsets', (len(offsets),), dtype='float32') 
+        d[:] = offsets
+        ds = hdf5_file.create_dataset('files', shape=len(files), dtype=h5py.string_dtype(), compression="gzip")
+        ds[:] = filenames
+
+    if clean:
+        # Remove temporary skymatch directory
+        bashCommand = "\\rm -fr "+skymatchdir
+        os.system(bashCommand)
 
 def plotcoverage(files, labels=None, cmap=None):
     """
